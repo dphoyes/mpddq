@@ -1,0 +1,21 @@
+[[package]]
+name = "python-mpd2"
+version = "3.0.4"
+description = "A Python MPD client library"
+category = "main"
+optional = false
+python-versions = ">=3.6"
+
+[package.extras]
+twisted = ["twisted"]
+
+[metadata]
+lock-version = "1.1"
+python-versions = "^3.9"
+content-hash = "8bc6372177b7e674513b33066f4a41e30a0b306507065c8e2660341405bd775d"
+
+[metadata.files]
+python-mpd2 = [
+    {file = "python-mpd2-3.0.4.tar.gz", hash = "sha256:7a67834e22d97e7cd77f8951c8baf87c149285c67d67d73550ce034302561ae5"},
+    {file = "python_mpd2-3.0.4-py2.py3-none-any.whl", hash = "sha256:77c623ff2a9efb2b653aa7110c8d5f541e202599adfe9de02096e115ee008d34"},
+]

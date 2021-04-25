@@ -1,271 +1,302 @@
 #!/usr/bin/env python3
-# PYTHON_ARGCOMPLETE_OK
 
-import os, mpd, random, argparse, argcomplete, yaml, time
-from gi.repository import GLib
-import functools
+from __future__ import annotations
 
-import dbus
-import dbus.service
-import _dbus_bindings as dbus_bindings
-from dbus.mainloop.glib import DBusGMainLoop
-DBusGMainLoop(set_as_default=True)
+import pathlib
+import anyio
+import mpd.asyncio
+import random
+import argparse
+import yaml
+import contextlib
+import dataclasses
+import copy
 
-
-
-# Traceback (most recent call last):
-#   File "/home/dphoyes/bin/mpddp", line 92, in f_with_mpd
-#     return f(self, *args, **kwargs)
-#   File "/home/dphoyes/bin/mpddp", line 116, in spinOnce
-#     self._addNewTracks()
-#   File "/home/dphoyes/bin/mpddp", line 151, in _addNewTracks
-#     self.mpd.add(self._chooseNewTrack())
-#   File "/usr/lib/python3.7/site-packages/mpd/base.py", line 381, in mpd_command
-#     return wrapper(self, name, args, callback)
-#   File "/usr/lib/python3.7/site-packages/mpd/base.py", line 473, in _execute
-#     return retval()
-#   File "/usr/lib/python3.7/site-packages/mpd/base.py", line 368, in command_callback
-#     res = function(self, self._read_lines())
-#   File "/usr/lib/python3.7/site-packages/mpd/base.py", line 311, in _parse_nothing
-#     for line in lines:
-#   File "/usr/lib/python3.7/site-packages/mpd/base.py", line 538, in _read_lines
-#     line = self._read_line()
-#   File "/usr/lib/python3.7/site-packages/mpd/base.py", line 527, in _read_line
-#     raise CommandError(error)
-# mpd.base.CommandError: [50@0] {} No such directory
+try:
+    import asyncinotify
+except OSError:
+    print("Warning: asyncinotify not available")
+    asyncinotify = None
 
 
+def get_config_defaults():
+    return {
+        "host": "localhost",
+        "port": 6600,
+        "partitions": {"default": {}},
+    }
 
-class MpddpDbus(dbus.service.Object):
-    Bus_Name = 'org.MPD.Mpddp'
-    Object_Path = '/org/MPD/Mpddp'
-    Interface_Name = 'org.MPD.MpddpInterface'
 
-    def __init__(self, mpddp, main_loop):
-        session = dbus.SessionBus()
-        if session.name_has_owner(self.Bus_Name):
-            print('Mpddp daemon is already running')
-            raise SystemExit(1)
-        bus_name = dbus.service.BusName(self.Bus_Name, session)
-        super().__init__(bus_name, self.Object_Path)
-        self.mpddp = mpddp
-        self.main_loop = main_loop
+def get_partition_config_defaults():
+    return {
+        "enabled": True,
+        "min-len": 10,
+        "max-hist-len": float('inf'),
+        "clear-when-stopped": False,
+        "source-playlists": {},
+    }
 
-    @dbus.service.method(Interface_Name)
-    def exit(self):
-        self.main_loop.quit()
 
-    @dbus.service.method(Interface_Name)
-    def reload(self):
-        self.mpddp.loadConfig()
-        self.mpddp.reloadTracks()
-        print("Reloaded")
+class BigConfigChange(Exception): pass
+class PartitionOnlyConfigChange(Exception): pass
 
-    @dbus.service.method(Interface_Name, in_signature='b')
-    def enable(self, on_off):
-        self.mpddp.params['enabled'] = bool(on_off)
-        self.mpddp.storeConfig()
-        print("Enabled" if self.mpddp.params['enabled'] else "Disabled")
 
-    @dbus.service.method(Interface_Name, in_signature='as', out_signature='b')
-    def setPlaylists(self, new_playlists):
-        prev_playlists = self.mpddp.params['source playlists']
-        self.mpddp.params['source playlists'] = [str(p) for p in new_playlists]
+class Mpddq:
+    def __init__(self, config):
+        self.conf_filename = config
+        self.stored_playlists = {}
+        self.config = None
+
+    async def load_config(self):
+        self.config = await anyio.to_thread.run_sync(self._sync_load_config, self.conf_filename)
+
+    @classmethod
+    def _sync_load_config(cls, conf_filename):
         try:
-            self.mpddp.reloadTracks()
-        except mpd.CommandError:
-            self.mpddp.params['source playlists'] = prev_playlists
-            return False
-        self.mpddp.storeConfig()
-        return True
-
-
-
-class Mpddp:
-    def __init__(self):
-        self.mpd = mpd.MPDClient()
-        self.conf_filename = os.path.join(os.environ['XDG_CONFIG_HOME'], 'mpddp3')
-        self.loadConfig()
-
-    def loadConfig(self):
-        try:
-            with open(self.conf_filename, 'r') as f:
-                self.params = yaml.safe_load(f)
+            with open(conf_filename, 'r') as f:
+                raw_params = yaml.safe_load(f)
         except FileNotFoundError:
-            self.params = {
-                'enabled': True,
-                'min playlist len': 15,
-                'max hist len': 4,
-                'source playlists': [],
-                'stored playlists': dict(),
-            }
-        self.storeConfig()
+            raw_params = {}
+        raw_params_copy = copy.deepcopy(raw_params)
 
-    def storeConfig(self):
-        with open(self.conf_filename, 'w') as f:
-            yaml.safe_dump(self.params, f, indent=4, default_flow_style=False)
-
-    def connect(self):
-        self.mpd.connect("localhost", 6600)
-        print ("Connected")
-
-    def _with_mpd(f):
-        @functools.wraps(f)
-        def f_with_mpd(self, *args, **kwargs):
-            while True:
+        config = get_config_defaults()
+        for k in config.keys():
+            try:
+                config[k] = raw_params[k]
+            except KeyError:
+                pass
+        partitions_section = config["partitions"]
+        for part_name, part_params in partitions_section.items():
+            partitions_section[part_name] = get_partition_config_defaults()
+            for k in partitions_section[part_name].keys():
                 try:
-                    return f(self, *args, **kwargs)
-                except mpd.ConnectionError:
+                    partitions_section[part_name][k] = part_params[k]
+                except KeyError:
                     pass
 
-                print("Connecting")
-                try:
-                    self.connect()
-                except (ConnectionResetError, ConnectionRefusedError):
-                    pass
-                time.sleep(2)
-        return f_with_mpd
+        if config != raw_params_copy:
+            cls._sync_store_config(conf_filename, config)
+        return config
 
-    @_with_mpd
-    def reloadTracks(self):
-        source_playlists = self.params['source playlists']
-        if len(source_playlists):
-            self.source_tracks = [tracks for tracks in (self.mpd.listplaylist(pl) for pl in source_playlists) if len(tracks)]
-        if not len(source_playlists) or not len(self.source_tracks):
-            self.source_tracks = [[tr['file'] for tr in self.mpd.listall() if 'file' in tr]]
+    @classmethod
+    def _sync_store_config(cls, conf_filename, config):
+        with open(conf_filename, 'w') as f:
+            yaml.safe_dump(config, f, indent=4, default_flow_style=False, sort_keys=False)
 
-    @_with_mpd
-    def spinOnce(self):
-        if self.params['enabled']:
-            self._removeOldTracks()
-            self._addNewTracks()
+    async def run(self):
+        await self.load_config()
+
+        while True:
+            with contextlib.suppress(BigConfigChange):
+                async with self.connect() as self.mpd:
+                    print("Connected")
+
+                    await self.load_stored_playlists()
+
+                    while True:
+                        with contextlib.suppress(PartitionOnlyConfigChange):
+                            async with anyio.create_task_group() as tasks:
+                                for name, config in self.config["partitions"].items():
+                                    tasks.start_soon(PartitionMonitor(
+                                        connect=self.connect,
+                                        name=name,
+                                        config=config,
+                                        stored_playlists=self.stored_playlists,
+                                    ).run)
+                                tasks.start_soon(self.keep_updating_stored_playlists)
+                                tasks.start_soon(self.keep_watching_config_file)
+
+    @contextlib.asynccontextmanager
+    async def connect(self):
+        client = mpd.asyncio.MPDClient()
+        await client.connect(self.config["host"], self.config["port"])
+        try:
+            yield client
+        finally:
+            client.disconnect()
+
+    async def load_stored_playlists(self):
+        playlist_list = await self.mpd.listplaylists()
+        for pl in playlist_list:
+            name = pl["playlist"]
+            last_modified = pl["last-modified"]
+            if name not in self.stored_playlists or self.stored_playlists[name].last_modified != last_modified:
+                print(f"Loading contents of playlist {repr(name)}")
+                self.stored_playlists[name] = StoredPlaylist(
+                    last_modified=last_modified,
+                    tracks=list(await self.mpd.listplaylist(name))
+                )
+
+    async def keep_updating_stored_playlists(self):
+        async with contextlib.aclosing(self.mpd.idle((
+            "stored_playlist",
+        ))) as iter_subsystems:
+            async for subsystem in iter_subsystems:
+                await self.load_stored_playlists()
+
+    async def keep_watching_config_file(self):
+        if asyncinotify is None:
+            return
+        with asyncinotify.Inotify() as inotify:
+            inotify.add_watch(self.conf_filename, asyncinotify.Mask.MODIFY)
+            async for event in inotify:
+                print(event)
+                prev_config = self.config
+                await self.load_config()
+                if self.config != prev_config:
+                    print("Config file was changed")
+                    params_diff = {k: v for k, v in self.config.items() if v != prev_config[k]}
+                    if list(params_diff.keys()) == ["partitions"]:
+                        raise PartitionOnlyConfigChange
+                    else:
+                        raise BigConfigChange
+
+
+@dataclasses.dataclass
+class StoredPlaylist:
+    last_modified: str
+    tracks: list[str]
+
+
+class PartitionMonitor:
+    def __init__(self, connect, name, config, stored_playlists):
+        self.connect = connect
+        self.name = name
+        self.config = config
+        self.stored_playlists = stored_playlists
+        self.playlist_picker = self.make_stored_playlist_picker()
+
+    async def run(self):
+        if not self.config["enabled"] or self.playlist_picker is None:
+            return
+
+        async with self.connect() as self.mpd:
+            await self.enter_partition()
+            self.status = self.prev_status = await self.mpd.status()
+            print(f"{self.name}: Connected")
+
+            await self.update_queue()
+            async with contextlib.aclosing(self.mpd.idle((
+                "player",
+                "playlist",
+                "options",
+            ))) as iter_subsystems:
+                async for subsystem in iter_subsystems:
+                    self.prev_status = self.status
+                    self.status = await self.mpd.status()
+                    await self.update_queue()
+
+    async def enter_partition(self):
+        for _ in range(3):
+            try:
+                await self.mpd.partition(self.name)
+                return
+            except mpd.CommandError as e:
+                if e.errno != mpd.FailureResponseCode.NO_EXIST:
+                    raise
+            try:
+                await self.mpd.newpartition(self.name)
+            except mpd.CommandError as e:
+                if e.errno != mpd.FailureResponseCode.EXIST:
+                    raise
+        raise RuntimeError(f"Failed to create partition {self.name}")
+
+    async def update_queue(self):
+        if await self.is_dynamic_enabled():
+            await self.remove_old_tracks()
+            await self.add_new_tracks()
+
+    async def is_dynamic_enabled(self):
+        try:
+            if int(self.status["random"]):
+                return False
+            if int(self.status["repeat"]) and not int(self.status["single"]):
+                return False
+        except KeyError as e:
+            print(f"{self.name}: Warning! MPD status has no key {repr(e.args[0])}")
+            return False
         return True
 
-    @_with_mpd
-    def mpd_lsinfo(self, path=''):
-        return self.mpd.lsinfo(path)
-
-    def all_tracks(self, path=''):
-        for f in self.mpd_lsinfo(path):
-            if 'directory' in f:
-                yield from self.all_tracks(f['directory'])
-            elif 'file' in f:
-                yield f
-
-    def _removeOldTracks(self):
+    async def remove_old_tracks(self):
+        if self.config["clear-when-stopped"]:
+            if self.status["state"]=="stop" and self.prev_status["state"]!="stop":
+                print(f"{self.name}: Clearing the queue because playback was stopped")
+                await self.mpd.clear()
+                return
         try:
-            current_track = int(self.mpd.status()['song'])
-            song_selected = True
+            current_track = int(self.status['song'])
         except KeyError:
-            song_selected = False
-
-        if song_selected:
-            n_tracks_to_remove = current_track - self.params['max hist len']
-            if n_tracks_to_remove > 0:
-                self.mpd.delete((0,n_tracks_to_remove))
-
-    def _isTooShort(self):
-        current_length = int(self.mpd.status()['playlistlength'])
-        return current_length < self.params['min playlist len']
-
-    def _chooseNewTrack(self):
-        return random.choice(random.choice(self.source_tracks))
-
-    def _addNewTracks(self):
-        while self._isTooShort():
-            self.mpd.add(self._chooseNewTrack())
-
-    @_with_mpd
-    def generate_stored_playlists(self):
-        gen = PlaylistGenerator(list(self.all_tracks()))
-        for name, spec in self.params['stored playlists'].items():
-            print("Generating {}".format(name))
-            self.mpd.playlistclear(name)
-            for t in gen(spec):
-                self.mpd.playlistadd(name, t)
-
-
-class PlaylistGenerator:
-    import re
-
-    def __init__(self, tracklist):
-        self.tracklist = tracklist
-
-    def gen_filter(self, attribute, pattern):
-        rx = self.re.compile(pattern)
-        if attribute.endswith('_not'):
-            attribute = attribute[:-4]
-            matches = lambda s: not rx.search(s)
+            pass
         else:
-            matches = rx.search
+            n_tracks_to_remove = current_track - self.config['max-hist-len']
+            if n_tracks_to_remove > 0:
+                print(f"{self.name}: Removing {n_tracks_to_remove} track{'' if n_tracks_to_remove==1 else 's'}")
+                await self.mpd.delete((0,n_tracks_to_remove))
 
-        def f(track):
-            return matches(track.get(attribute, ''))
+    def make_stored_playlist_picker(self):
+        src = self.config["source-playlists"]
+        if not src:
+            playlist_picker = None
+        elif isinstance(src, str):
+            def playlist_picker():
+                return src
+        elif isinstance(src, list):
+            def playlist_picker():
+                return random.choice(src)
+        else:
+            k = list(src.keys())
+            w = list(src.values())
+            def playlist_picker():
+                result, = random.choices(k, weights=w)
+                return result
+        return playlist_picker
 
-        return f
+    async def add_new_tracks(self):
+        async def is_too_short():
+            current_length = int((await self.mpd.status())['playlistlength'])
+            return current_length < self.config['min-len']
 
-    def __call__(self, spec):
-        filters = [self.gen_filter(k,v) for k,v in spec.items()]
-        for t in self.tracklist:
-            if all(f(t) for f in filters):
-                yield t['file']
+        async def choose_new_track():
+            while True:
+                pl_name = self.playlist_picker()
+                try:
+                    return random.choice(self.stored_playlists[pl_name].tracks)
+                except KeyError:
+                    print(f"{self.name}: Warning! Playlist {repr(pl_name)} doesn't exist")
+                except IndexError:
+                    print(f"{self.name}: Warning! Playlist {repr(pl_name)} is empty")
+                await anyio.sleep(5)
 
-
-def startDaemon():
-    mpddp = Mpddp()
-    mpddp.reloadTracks()
-    main_loop = GLib.MainLoop()
-    dbus_service = MpddpDbus(mpddp, main_loop)
-
-    GLib.timeout_add(500, mpddp.spinOnce)
-
-    try:
-        main_loop.run()
-    except KeyboardInterrupt:
-        raise SystemExit(0)
-
-
-def generate_stored_playlists():
-    mpddp = Mpddp()
-    mpddp.generate_stored_playlists()
-    dbusCommand('reload')
+        while await is_too_short():
+            new_track = await choose_new_track()
+            print(f"{self.name}: Adding {new_track}")
+            await self.mpd.add(new_track)
 
 
-def dbusCommand(command, arg=None):
-    command_args = [arg] if arg is not None else []
-    session = dbus.SessionBus()
-    try:
-        obj = session.get_object(MpddpDbus.Bus_Name, MpddpDbus.Object_Path)
-    except dbus.exceptions.DBusException:
-        print('Mpddp must first be started using `mpddp daemon`')
-        raise SystemExit(1)
+if not hasattr(contextlib, "aclosing"):
+    class aclosing:
+        def __init__(self, thing):
+            self.thing = thing
+        async def __aenter__(self):
+            return self.thing
+        async def __aexit__(self, *exc_info):
+            await self.thing.aclose()
+    contextlib.aclosing = aclosing
+    del aclosing
 
-    func = getattr(obj, command)
-    res = func(*command_args, dbus_interface=MpddpDbus.Interface_Name)
 
-    if type(res) == dbus.Boolean:
-        print ("Success" if res else "Failure")
-        if not res:
-            raise SystemExit(1)
-    elif res != None:
-        print(res)
+def startDaemon(config):
+    anyio.run(Mpddq(config).run, backend='asyncio')
+
 
 def main():
-    parser = argparse.ArgumentParser(prog='mpddp')
+    parser = argparse.ArgumentParser(prog='mpddq')
     subparsers = parser.add_subparsers()
 
-    subparsers.add_parser('daemon').set_defaults(func=startDaemon)
-    subparsers.add_parser('regenerate').set_defaults(func=generate_stored_playlists)
+    daemon = subparsers.add_parser('daemon')
+    daemon.set_defaults(func=startDaemon)
+    daemon.add_argument("--config", required=True, type=pathlib.Path, help="Path to the config file")
 
-    subparsers.add_parser('exit').set_defaults(func=dbusCommand, command='exit')
-    subparsers.add_parser('on').set_defaults(func=dbusCommand, command='enable', arg=True)
-    subparsers.add_parser('off').set_defaults(func=dbusCommand, command='enable', arg=False)
-
-    set_playlist_parser = subparsers.add_parser('setplaylist')
-    set_playlist_parser.set_defaults(func=dbusCommand, command='setPlaylists')
-    set_playlist_parser.add_argument('arg', metavar='playlist', nargs='*')
-
-    argcomplete.autocomplete(parser)
     args = parser.parse_args().__dict__
     try:
         func = args.pop('func')

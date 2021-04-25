@@ -7,6 +7,9 @@ authors = ["David Hoyes <dphoyes@gmail.com>"]
 [tool.poetry.dependencies]
 python = "^3.9"
 python-mpd2 = "^3.0.4"
+anyio = {git = "git@github.com:agronholm/anyio.git", tag = "3.0.0rc4"}
+PyYAML = "^5.4.1"
+asyncinotify = "^2.0.2"
 
 [tool.poetry.dev-dependencies]
 

@@ -84,6 +84,14 @@ class Mpddq:
             yaml.safe_dump(config, f, indent=4, default_flow_style=False, sort_keys=False)
 
     async def run(self):
+        while True:
+            try:
+                await self.run_until_disconnect()
+            except (mpd.ConnectionError, ConnectionError) as e:
+                print(f"ConnectionError ({repr(type(e))})")
+                await anyio.sleep(5)
+
+    async def run_until_disconnect(self):
         await self.load_config()
 
         while True:

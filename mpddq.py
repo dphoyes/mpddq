@@ -190,6 +190,7 @@ class PartitionMonitor:
                 "options",
             ))) as iter_subsystems:
                 async for subsystem in iter_subsystems:
+                    await anyio.sleep(0.15)
                     self.prev_status = self.status
                     self.status = await self.mpd.status()
                     await self.update_queue()

@@ -228,7 +228,11 @@ class PartitionMonitor:
 
     async def remove_old_tracks(self):
         if self.config["clear-when-stopped"]:
-            if self.status["state"]=="stop" and self.prev_status["state"]!="stop":
+            if (
+                self.status["state"] == "stop"
+                and self.prev_status["state"] != "stop"
+                and self.status["playlist"] == self.prev_status["playlist"]
+            ):
                 print(f"{self.name}: Clearing the queue because playback was stopped")
                 await self.mpd.clear()
                 return

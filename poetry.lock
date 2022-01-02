@@ -1,6 +1,6 @@
 [[package]]
 name = "anyio"
-version = "3.1.0"
+version = "3.4.0"
 description = "High level compatibility layer for multiple asynchronous event loop implementations"
 category = "main"
 optional = false
@@ -12,7 +12,7 @@ sniffio = ">=1.1"
 
 [package.extras]
 doc = ["sphinx-rtd-theme", "sphinx-autodoc-typehints (>=1.2.0)"]
-test = ["coverage[toml] (>=4.5)", "hypothesis (>=4.0)", "pytest (>=6.0)", "pytest-mock (>=3.6.1)", "trustme", "uvloop (<0.15)", "mock (>=4)", "uvloop (>=0.15)"]
+test = ["coverage[toml] (>=4.5)", "hypothesis (>=4.0)", "pytest (>=6.0)", "pytest-mock (>=3.6.1)", "trustme", "contextlib2", "uvloop (<0.15)", "mock (>=4)", "uvloop (>=0.15)"]
 trio = ["trio (>=0.16)"]
 
 [[package]]
@@ -25,7 +25,7 @@ python-versions = "*"
 
 [[package]]
 name = "idna"
-version = "3.2"
+version = "3.3"
 description = "Internationalized Domain Names in Applications (IDNA)"
 category = "main"
 optional = false
@@ -38,9 +38,16 @@ description = "A Python MPD client library"
 category = "main"
 optional = false
 python-versions = ">=3.6"
+develop = false
 
 [package.extras]
 twisted = ["twisted"]
+
+[package.source]
+type = "git"
+url = "https://github.com/Mic92/python-mpd2.git"
+reference = "6559585720ea69b30523935bb7503e2bd8c99973"
+resolved_reference = "6559585720ea69b30523935bb7503e2bd8c99973"
 
 [[package]]
 name = "pyyaml"
@@ -61,24 +68,22 @@ python-versions = ">=3.5"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "cbc51b9cc6541e723a482374c0569140108e8813c867b1dbbf8bf14be6dc38f1"
+content-hash = "71d6728f619cd128e0acc473a536fdf8157a57c438d50d26ca79766558f811d3"
 
 [metadata.files]
 anyio = [
-    {file = "anyio-3.1.0-py3-none-any.whl", hash = "sha256:5e335cef65fbd1a422bbfbb4722e8e9a9fadbd8c06d5afe9cd614d12023f6e5a"},
-    {file = "anyio-3.1.0.tar.gz", hash = "sha256:43e20711a9d003d858d694c12356dc44ab82c03ccc5290313c3392fa349dad0e"},
+    {file = "anyio-3.4.0-py3-none-any.whl", hash = "sha256:2855a9423524abcdd652d942f8932fda1735210f77a6b392eafd9ff34d3fe020"},
+    {file = "anyio-3.4.0.tar.gz", hash = "sha256:24adc69309fb5779bc1e06158e143e0b6d2c56b302a3ac3de3083c705a6ed39d"},
 ]
 asyncinotify = [
     {file = "asyncinotify-2.0.2-py3-none-any.whl", hash = "sha256:26fa85d282df0066ab423cd96754d7ea07e6013d8a69a51e573303dbd0d2dff6"},
+    {file = "asyncinotify-2.0.2.tar.gz", hash = "sha256:867cc056d88fc07aa8b3d1dc5b9c3c911cdd6130a4df5f67beb1fdecfd37b164"},
 ]
 idna = [
-    {file = "idna-3.2-py3-none-any.whl", hash = "sha256:14475042e284991034cb48e06f6851428fb14c4dc953acd9be9a5e95c7b6dd7a"},
-    {file = "idna-3.2.tar.gz", hash = "sha256:467fbad99067910785144ce333826c71fb0e63a425657295239737f7ecd125f3"},
+    {file = "idna-3.3-py3-none-any.whl", hash = "sha256:84d9dd047ffa80596e0f246e2eab0b391788b0503584e8945f2368256d2735ff"},
+    {file = "idna-3.3.tar.gz", hash = "sha256:9d643ff0a55b762d5cdb124b8eaa99c66322e2157b69160bc32796e824360e6d"},
 ]
-python-mpd2 = [
-    {file = "python-mpd2-3.0.4.tar.gz", hash = "sha256:7a67834e22d97e7cd77f8951c8baf87c149285c67d67d73550ce034302561ae5"},
-    {file = "python_mpd2-3.0.4-py2.py3-none-any.whl", hash = "sha256:77c623ff2a9efb2b653aa7110c8d5f541e202599adfe9de02096e115ee008d34"},
-]
+python-mpd2 = []
 pyyaml = [
     {file = "PyYAML-5.4.1-cp27-cp27m-macosx_10_9_x86_64.whl", hash = "sha256:3b2b1824fe7112845700f815ff6a489360226a5609b96ec2190a45e62a9fc922"},
     {file = "PyYAML-5.4.1-cp27-cp27m-win32.whl", hash = "sha256:129def1b7c1bf22faffd67b8f3724645203b79d8f4cc81f674654d9902cb4393"},

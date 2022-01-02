@@ -6,7 +6,7 @@ authors = ["David Hoyes <dphoyes@gmail.com>"]
 
 [tool.poetry.dependencies]
 python = "^3.9"
-python-mpd2 = "^3.0.4"
+python-mpd2 = { git = "https://github.com/Mic92/python-mpd2.git", rev = "6559585720ea69b30523935bb7503e2bd8c99973" }
 anyio = "^3.1.0"
 PyYAML = "^5.4.1"
 asyncinotify = "^2.0.2"
